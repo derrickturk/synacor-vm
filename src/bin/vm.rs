@@ -1,7 +1,7 @@
 use std::{
     env,
     error::Error,
-    io::Read,
+    io::{self, Read},
     fs::File,
 };
 
@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut vm = Vm::new();
     vm.load(&prog)?;
+    vm.run(&mut io::stdin(), &mut io::stdout())?;
 
     Ok(())
 }

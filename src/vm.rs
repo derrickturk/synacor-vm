@@ -1,13 +1,26 @@
 use std::{
     error,
     fmt,
+    io::{Read, Write},
 };
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Error {
     BadBinary,
     ProgramTooLarge(usize),
+    StackUnderflow,
+    InvalidSrcOperand(u16),
+    InvalidDstOperand(u16),
+    InvalidIp(usize),
+    IllegalInstruction(u16),
+    InvalidIOWord(u16),
+    IOError,
 }
+
+const INDIRECT_BIT: u16 = 0b1000000000000000;
+const VALID_REGISTER_MASK: u16 = 0b0111111111111000;
+const REGISTER_MASK: u16 = 0b0000000000000111;
+const VALID_IO_MASK: u16 = 0b1111111100000000;
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -15,6 +28,18 @@ impl fmt::Display for Error {
             Error::BadBinary => write!(f, "bad binary format"),
             Error::ProgramTooLarge(n) =>
               write!(f, "program too large ({} words)", n),
+            Error::StackUnderflow => write!(f, "pop from empty stack"),
+            Error::InvalidSrcOperand(w) =>
+              write!(f, "invalid source operand word ({})", w),
+            Error::InvalidDstOperand(w) =>
+              write!(f, "invalid destination operand word ({})", w),
+            Error::InvalidIp(ip) =>
+              write!(f, "invalid instruction pointer ({})", ip),
+            Error::IllegalInstruction(w) =>
+              write!(f, "illegal instruction ({})", w),
+            Error::InvalidIOWord(w) =>
+              write!(f, "invalid I/O word ({})", w),
+            Error::IOError => write!(f, "I/O error"),
         }
     }
 }
@@ -23,9 +48,17 @@ impl error::Error for Error { }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug, Copy, Clone)]
+pub enum VmState {
+    Running,
+    Halted,
+}
+
+#[derive(Debug, Clone)]
 pub struct Vm {
     memory: [u16; 32768],
     registers: [u16; 8],
+    ip: usize,
     stack: Vec<u16>,
 }
 
@@ -34,6 +67,7 @@ impl Vm {
         Self {
             memory: [0; 32768],
             registers: [0; 8],
+            ip: 0,
             stack: Vec::new(),
         }
     }
@@ -46,5 +80,219 @@ impl Vm {
         self.memory = [0; 32768];
         self.memory[0..program.len()].copy_from_slice(program);
         Ok(())
+    }
+
+    #[inline]
+    pub fn run<R: Read, W: Write>(&mut self, read: &mut R, write: &mut W
+      ) -> Result<()> {
+        loop {
+            match self.step(read, write)? {
+                VmState::Halted => return Ok(()),
+                _ => { }
+            };
+        }
+    }
+
+    pub fn step<R: Read, W: Write>(&mut self, read: &mut R, write: &mut W
+      ) -> Result<VmState> {
+        let (mut new_ip, instr) = Instruction::decode(
+          &self.memory[..], self.ip)?;
+        match instr {
+            Instruction::Halt => return Ok(VmState::Halted),
+
+            Instruction::Out(src) => {
+                let byte = self.read_src(&src);
+                if byte & VALID_IO_MASK != 0 {
+                    return Err(Error::InvalidIOWord(byte));
+                }
+                let byte = byte as u8;
+                write.write_all(&[byte]).map_err(|_| Error::IOError)?;
+            },
+
+            Instruction::Noop => { },
+
+            _ => { },
+        };
+
+        self.ip = new_ip;
+        Ok(VmState::Running)
+    }
+
+    #[inline]
+    fn read_src(&self, operand: &SrcOperand) -> u16 {
+        match *operand {
+            SrcOperand::Immediate(val) => val,
+            SrcOperand::Register(reg) => self.registers[reg],
+        }
+    }
+
+    #[inline]
+    fn write_dst(&mut self, operand: &DstOperand, word: u16) {
+        match *operand {
+            DstOperand::Register(reg) => self.registers[reg] = word,
+        };
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum SrcOperand {
+    Immediate(u16),
+    Register(usize),
+}
+
+impl SrcOperand {
+    pub fn decode(word: u16) -> Result<Self> {
+        if word & INDIRECT_BIT != 0 {
+            if word & VALID_REGISTER_MASK != 0 {
+                Err(Error::InvalidSrcOperand(word))
+            } else {
+                Ok(SrcOperand::Register((word & REGISTER_MASK) as usize))
+            }
+        } else {
+            Ok(SrcOperand::Immediate(word))
+        }
+    }
+
+    #[inline]
+    pub fn decode_at(memory: &[u16], ip: usize) -> Result<Self> {
+        Self::decode(*memory.get(ip).ok_or(Error::InvalidIp(ip))?)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum DstOperand {
+    Register(usize)
+}
+
+impl DstOperand {
+    pub fn decode(word: u16) -> Result<Self> {
+        if word & INDIRECT_BIT != 0 {
+            if word & VALID_REGISTER_MASK != 0 {
+                Err(Error::InvalidDstOperand(word))
+            } else {
+                Ok(DstOperand::Register((word & REGISTER_MASK) as usize))
+            }
+        } else {
+            Err(Error::InvalidDstOperand(word))
+        }
+    }
+
+    #[inline]
+    pub fn decode_at(memory: &[u16], ip: usize) -> Result<Self> {
+        Self::decode(*memory.get(ip).ok_or(Error::InvalidIp(ip))?)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Instruction {
+    Halt,
+    Set(DstOperand, SrcOperand),
+    Push(SrcOperand),
+    Pop(DstOperand),
+    Eq(DstOperand, SrcOperand, SrcOperand),
+    Gt(DstOperand, SrcOperand, SrcOperand),
+    Jmp(SrcOperand),
+    Jt(SrcOperand, SrcOperand),
+    Jf(SrcOperand, SrcOperand),
+    Add(DstOperand, SrcOperand, SrcOperand),
+    Mult(DstOperand, SrcOperand, SrcOperand),
+    Mod(DstOperand, SrcOperand, SrcOperand),
+    And(DstOperand, SrcOperand, SrcOperand),
+    Or(DstOperand, SrcOperand, SrcOperand),
+    Not(DstOperand, SrcOperand),
+    Rmem(DstOperand, SrcOperand),
+    Wmem(SrcOperand, SrcOperand),
+    Call(SrcOperand),
+    Ret,
+    Out(SrcOperand),
+    In(DstOperand),
+    Noop,
+}
+
+impl Instruction {
+    pub fn decode(memory: &[u16], ip: usize) -> Result<(usize, Instruction)> {
+        match *memory.get(ip).ok_or(Error::InvalidIp(ip))? {
+            0 => Ok((ip, Instruction::Halt)),
+            1 => Ok((ip + 3, Instruction::Set(
+                   DstOperand::decode_at(memory, ip + 1)?,
+                   SrcOperand::decode_at(memory, ip + 2)?
+                 ))),
+            2 => Ok((ip + 2, Instruction::Push(
+                   SrcOperand::decode_at(memory, ip + 1)?
+                 ))),
+            3 => Ok((ip + 2, Instruction::Pop(
+                   DstOperand::decode_at(memory, ip + 1)?
+                 ))),
+            4 => Ok((ip + 4, Instruction::Eq(
+                   DstOperand::decode_at(memory, ip + 1)?,
+                   SrcOperand::decode_at(memory, ip + 2)?,
+                   SrcOperand::decode_at(memory, ip + 3)?
+                 ))),
+            5 => Ok((ip + 4, Instruction::Gt(
+                   DstOperand::decode_at(memory, ip + 1)?,
+                   SrcOperand::decode_at(memory, ip + 2)?,
+                   SrcOperand::decode_at(memory, ip + 3)?
+                 ))),
+            6 => Ok((ip + 2, Instruction::Jmp(
+                   SrcOperand::decode_at(memory, ip + 1)?
+                 ))),
+            7 => Ok((ip + 3, Instruction::Jt(
+                   SrcOperand::decode_at(memory, ip + 1)?,
+                   SrcOperand::decode_at(memory, ip + 2)?
+                 ))),
+            8 => Ok((ip + 3, Instruction::Jf(
+                   SrcOperand::decode_at(memory, ip + 1)?,
+                   SrcOperand::decode_at(memory, ip + 2)?
+                 ))),
+            9 => Ok((ip + 4, Instruction::Add(
+                   DstOperand::decode_at(memory, ip + 1)?,
+                   SrcOperand::decode_at(memory, ip + 2)?,
+                   SrcOperand::decode_at(memory, ip + 3)?
+                 ))),
+            10 => Ok((ip + 4, Instruction::Mult(
+                    DstOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?,
+                    SrcOperand::decode_at(memory, ip + 3)?
+                  ))),
+            11 => Ok((ip + 4, Instruction::Mod(
+                    DstOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?,
+                    SrcOperand::decode_at(memory, ip + 3)?
+                  ))),
+            12 => Ok((ip + 4, Instruction::And(
+                    DstOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?,
+                    SrcOperand::decode_at(memory, ip + 3)?
+                  ))),
+            13 => Ok((ip + 4, Instruction::Or(
+                    DstOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?,
+                    SrcOperand::decode_at(memory, ip + 3)?
+                  ))),
+            14 => Ok((ip + 3, Instruction::Not(
+                    DstOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?
+                  ))),
+            15 => Ok((ip + 3, Instruction::Rmem(
+                    DstOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?
+                  ))),
+            16 => Ok((ip + 3, Instruction::Wmem(
+                    SrcOperand::decode_at(memory, ip + 1)?,
+                    SrcOperand::decode_at(memory, ip + 2)?
+                  ))),
+            17 => Ok((ip + 2, Instruction::Call(
+                    SrcOperand::decode_at(memory, ip + 1)?
+                  ))),
+            18 => Ok((ip + 1, Instruction::Ret)),
+            19 => Ok((ip + 2, Instruction::Out(
+                    SrcOperand::decode_at(memory, ip + 1)?
+                  ))),
+            20 => Ok((ip + 2, Instruction::In(
+                    DstOperand::decode_at(memory, ip + 1)?
+                  ))),
+            21 => Ok((ip + 1, Instruction::Noop)),
+            word => Err(Error::IllegalInstruction(word)),
+        }
     }
 }

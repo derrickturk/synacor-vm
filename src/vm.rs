@@ -15,6 +15,7 @@ pub enum Error {
     IllegalInstruction(u16),
     InvalidIOWord(u16),
     IOError,
+    InvalidAddress(u16),
 }
 
 const INDIRECT_BIT: u16 = 0b1000000000000000;
@@ -40,6 +41,8 @@ impl fmt::Display for Error {
             Error::InvalidIOWord(w) =>
               write!(f, "invalid I/O word ({})", w),
             Error::IOError => write!(f, "I/O error"),
+            Error::InvalidAddress(w) =>
+              write!(f, "invalid memory address ({})", w),
         }
     }
 }
@@ -100,6 +103,76 @@ impl Vm {
         match instr {
             Instruction::Halt => return Ok(VmState::Halted),
 
+            Instruction::Set(dst, src) =>
+              self.write_dst(&dst, self.read_src(&src)),
+
+            Instruction::Push(src) => self.stack.push(self.read_src(&src)),
+
+            Instruction::Pop(dst) => match self.stack.pop() {
+                Some(val) => self.write_dst(&dst, val),
+                None => return Err(Error::StackUnderflow),
+            },
+
+            Instruction::Eq(dst, lhs, rhs) =>
+              self.write_dst(&dst,
+                (self.read_src(&lhs) == self.read_src(&rhs)) as u16),
+
+            Instruction::Gt(dst, lhs, rhs) =>
+              self.write_dst(&dst,
+                (self.read_src(&lhs) > self.read_src(&rhs)) as u16),
+
+            Instruction::Jmp(ip) => new_ip = self.read_src(&ip) as usize,
+
+            Instruction::Jt(cond, ip) => if self.read_src(&cond) != 0 {
+                new_ip = self.read_src(&ip) as usize;
+            },
+
+            Instruction::Jf(cond, ip) => if self.read_src(&cond) == 0 {
+                new_ip = self.read_src(&ip) as usize;
+            },
+
+            Instruction::Add(dst, lhs, rhs) =>
+              self.write_dst(&dst,
+                self.read_src(&lhs).wrapping_add(self.read_src(&rhs))
+                & !INDIRECT_BIT),
+
+            Instruction::Mult(dst, lhs, rhs) =>
+              self.write_dst(&dst,
+                self.read_src(&lhs).wrapping_mul(self.read_src(&rhs))
+                & !INDIRECT_BIT),
+
+            Instruction::Mod(dst, lhs, rhs) =>
+              self.write_dst(&dst, self.read_src(&lhs) % self.read_src(&rhs)),
+
+            Instruction::And(dst, lhs, rhs) =>
+              self.write_dst(&dst, self.read_src(&lhs) & self.read_src(&rhs)),
+
+            Instruction::Or(dst, lhs, rhs) =>
+              self.write_dst(&dst, self.read_src(&lhs) | self.read_src(&rhs)),
+
+            Instruction::Not(dst, src) =>
+              self.write_dst(&dst, !self.read_src(&src) & !INDIRECT_BIT),
+
+            Instruction::Rmem(dst, src_addr) =>
+              self.write_dst(&dst,
+                self.read_indirect(self.read_src(&src_addr))?),
+
+            Instruction::Wmem(dst_addr, src_addr) =>
+              self.write_indirect(
+                self.read_src(&dst_addr), self.read_src(&src_addr))?,
+
+            Instruction::Call(ip) => {
+                self.stack.push(new_ip as u16);
+                new_ip = self.read_src(&ip) as usize;
+            },
+
+            Instruction::Ret => {
+                match self.stack.pop() {
+                    Some(ip) => new_ip = ip as usize,
+                    None => return Ok(VmState::Halted),
+                };
+            },
+
             Instruction::Out(src) => {
                 let byte = self.read_src(&src);
                 if byte & VALID_IO_MASK != 0 {
@@ -109,9 +182,18 @@ impl Vm {
                 write.write_all(&[byte]).map_err(|_| Error::IOError)?;
             },
 
-            Instruction::Noop => { },
+            Instruction::In(dst) => {
+                let mut buf = [0u8];
+                loop {
+                    read.read_exact(&mut buf[..]).map_err(|_| Error::IOError)?;
+                    if buf[0] != b'\r' {
+                        break;
+                    }
+                }
+                self.write_dst(&dst, buf[0] as u16);
+            },
 
-            _ => { },
+            Instruction::Noop => { },
         };
 
         self.ip = new_ip;
@@ -131,6 +213,18 @@ impl Vm {
         match *operand {
             DstOperand::Register(reg) => self.registers[reg] = word,
         };
+    }
+
+    #[inline]
+    fn read_indirect(&self, ptr: u16) -> Result<u16> {
+        Ok(*self.memory.get(ptr as usize).ok_or(Error::InvalidAddress(ptr))?)
+    }
+
+    #[inline]
+    fn write_indirect(&mut self, ptr: u16, word: u16) -> Result<()> {
+        *self.memory.get_mut(ptr as usize)
+          .ok_or(Error::InvalidAddress(ptr))? = word;
+        Ok(())
     }
 }
 

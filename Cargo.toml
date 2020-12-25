@@ -1,0 +1,13 @@
+[package]
+name = "synacor-vm"
+version = "0.1.0"
+authors = ["Derrick W. Turk <dwt@terminusdatascience.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "synacor_vm"
+path = "src/lib.rs"
+
+[dependencies]

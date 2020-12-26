@@ -10,4 +10,13 @@ edition = "2018"
 name = "synacor_vm"
 path = "src/lib.rs"
 
+[[bin]]
+name = "synvm"
+path = "src/bin/vm.rs"
+
+[[bin]]
+name = "syndis"
+path = "src/bin/disas.rs"
+
 [dependencies]
+structopt = "0.3"

@@ -83,8 +83,12 @@ impl ImageMap {
         ImageMap { stmts, labels, origins }
     }
 
-    pub fn disasm<W: Write>(&self, w: &mut W) -> Result<(), DisAsmError> {
+    pub fn disasm<W: Write>(&self, w: &mut W, opts: &DisAsmOpts
+      ) -> Result<(), DisAsmError> {
         for (ip, stmt) in &self.stmts {
+            if opts.line_addrs {
+                write!(w, "{}\t", ip)?;
+            }
             stmt.disasm(*ip, self, w)?;
         }
         Ok(())
@@ -123,7 +127,7 @@ impl ImageMap {
 
             Instruction::Call(SrcOperand::Immediate(dst)) => {
                 labels.entry(*dst as usize).or_insert_with(|| {
-                    let lbl = format!("lbl{}", next_label);
+                    let lbl = format!("fn{}", next_label);
                     *next_label += 1;
                     lbl
                 });
@@ -138,6 +142,7 @@ impl ImageMap {
 #[derive(Clone, Debug)]
 pub struct DisAsmOpts {
     pub autolabel: bool,
+    pub line_addrs: bool,
     pub initial_labels: Option<HashMap<usize, String>>,
 }
 
@@ -145,6 +150,7 @@ impl Default for DisAsmOpts {
     fn default() -> Self {
         Self {
             autolabel: true,
+            line_addrs: false,
             initial_labels: None,
         }
     }

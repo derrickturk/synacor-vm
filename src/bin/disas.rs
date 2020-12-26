@@ -20,6 +20,9 @@ struct Options {
     #[structopt(short, long)]
     autolabel: bool,
 
+    #[structopt(short, long)]
+    line_addrs: bool,
+
     #[structopt(short, long, parse(from_os_str))]
     output_file: Option<PathBuf>,
 
@@ -63,15 +66,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let opts = DisAsmOpts {
         autolabel: options.autolabel,
+        line_addrs: options.line_addrs,
         initial_labels,
     };
 
     let map = ImageMap::new(&prog, &opts);
 
     if let Some(path) = options.output_file {
-        map.disasm(&mut File::create(path)?)?;
+        map.disasm(&mut File::create(path)?, &opts)?;
     } else {
-        map.disasm(&mut io::stdout())?;
+        map.disasm(&mut io::stdout(), &opts)?;
     }
 
     Ok(())

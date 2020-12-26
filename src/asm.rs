@@ -54,10 +54,6 @@ pub struct ImageMap {
     pub origins: HashSet<usize>,
 }
 
-/* TODO: we should probably be smarter about flagging addrs
- *   as "probably data" vs. "probably code", depending on whether
- *   they ever appear as jump targets or read/write source/sinks
- */
 impl ImageMap {
     pub fn new(memory: &[u16], opts: &DisAsmOpts) -> ImageMap {
         let mut stmts = Vec::new();

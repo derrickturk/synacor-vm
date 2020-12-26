@@ -15,7 +15,10 @@ use structopt::StructOpt;
 #[derive(StructOpt, Debug)]
 struct Options {
     #[structopt(name="FILE", parse(from_os_str))]
-    input_file: PathBuf,
+    image_file: PathBuf,
+
+    #[structopt(short, long, parse(from_os_str))]
+    initial_input: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -23,13 +26,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let prog = {
         let mut prog = Vec::new();
-        File::open(options.input_file)?.read_to_end(&mut prog)?;
+        File::open(options.image_file)?.read_to_end(&mut prog)?;
         binary::read_binary(&prog)?
     };
 
     let mut vm = Vm::new();
     vm.load(&prog)?;
-    vm.run(&mut io::stdin(), &mut io::stdout())?;
+
+    if let Some(path) = options.initial_input {
+        vm.run(&mut File::open(path)?.chain(io::stdin()), &mut io::stdout())?;
+    } else {
+        vm.run(&mut io::stdin(), &mut io::stdout())?;
+    }
 
     Ok(())
 }

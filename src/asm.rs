@@ -61,7 +61,9 @@ pub struct ImageMap {
 impl ImageMap {
     pub fn new(memory: &[u16], opts: &DisAsmOpts) -> ImageMap {
         let mut stmts = Vec::new();
-        let mut labels = HashMap::new();
+        let mut labels = opts.initial_labels.as_ref()
+            .map(|m| m.clone())
+            .unwrap_or_else(|| HashMap::new());
         let mut origins = HashSet::new();
         let mut next_label = 0;
         let mut ip = 0;
@@ -137,15 +139,17 @@ impl ImageMap {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct DisAsmOpts {
     pub autolabel: bool,
+    pub initial_labels: Option<HashMap<usize, String>>,
 }
 
 impl Default for DisAsmOpts {
     fn default() -> Self {
         Self {
             autolabel: true,
+            initial_labels: None,
         }
     }
 }

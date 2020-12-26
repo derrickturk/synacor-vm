@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     error,
     fmt,
     io::{self, Write},
@@ -49,6 +50,8 @@ pub enum AsmItem {
 #[derive(Clone, Debug)]
 pub struct ImageMap {
     pub stmts: Vec<(usize, AsmItem)>,
+    pub labels: HashMap<usize, String>,
+    pub origins: HashSet<usize>,
 }
 
 /* TODO: we should probably be smarter about flagging addrs
@@ -56,13 +59,22 @@ pub struct ImageMap {
  *   they ever appear as jump targets or read/write source/sinks
  */
 impl ImageMap {
-    pub fn new(memory: &[u16]) -> ImageMap {
+    pub fn new(memory: &[u16], opts: &DisAsmOpts) -> ImageMap {
         let mut stmts = Vec::new();
+        let mut labels = HashMap::new();
+        let mut origins = HashSet::new();
+        let mut next_label = 0;
         let mut ip = 0;
 
         while ip < memory.len() {
             if let Ok((new_ip, instr)) = Instruction::decode(memory, ip) {
                 stmts.push((ip, AsmItem::Instruction(instr)));
+
+                if opts.autolabel {
+                    Self::add_labels(ip, &instr,
+                      &mut labels, &mut origins, &mut next_label);
+                }
+
                 ip = new_ip;
             } else {
                 stmts.push((ip, AsmItem::Value(memory[ip])));
@@ -70,7 +82,7 @@ impl ImageMap {
             }
         }
 
-        ImageMap { stmts }
+        ImageMap { stmts, labels, origins }
     }
 
     pub fn disasm<W: Write>(&self, w: &mut W) -> Result<(), DisAsmError> {
@@ -78,6 +90,63 @@ impl ImageMap {
             stmt.disasm(*ip, self, w)?;
         }
         Ok(())
+    }
+
+    fn add_labels(ip: usize, instr: &Instruction,
+      labels: &mut HashMap<usize, String>, origins: &mut HashSet<usize>,
+      next_label: &mut usize) {
+        match instr {
+            Instruction::Jmp(SrcOperand::Immediate(dst)) => {
+                labels.entry(*dst as usize).or_insert_with(|| {
+                    let lbl = format!("lbl{}", next_label);
+                    *next_label += 1;
+                    lbl
+                });
+                origins.insert(ip + 1);
+            },
+
+            Instruction::Jt(_, SrcOperand::Immediate(dst)) => {
+                labels.entry(*dst as usize).or_insert_with(|| {
+                    let lbl = format!("lbl{}", next_label);
+                    *next_label += 1;
+                    lbl
+                });
+                origins.insert(ip + 2);
+            },
+
+            Instruction::Jf(_, SrcOperand::Immediate(dst)) => {
+                labels.entry(*dst as usize).or_insert_with(|| {
+                    let lbl = format!("lbl{}", next_label);
+                    *next_label += 1;
+                    lbl
+                });
+                origins.insert(ip + 2);
+            },
+
+            Instruction::Call(SrcOperand::Immediate(dst)) => {
+                labels.entry(*dst as usize).or_insert_with(|| {
+                    let lbl = format!("lbl{}", next_label);
+                    *next_label += 1;
+                    lbl
+                });
+                origins.insert(ip + 1);
+            },
+
+            _ => { },
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct DisAsmOpts {
+    pub autolabel: bool,
+}
+
+impl Default for DisAsmOpts {
+    fn default() -> Self {
+        Self {
+            autolabel: true,
+        }
     }
 }
 
@@ -280,6 +349,9 @@ impl DisAsm for DstOperand {
 impl DisAsm for AsmItem {
     fn disasm<W: Write>(&self, ip: usize, map: &ImageMap, w: &mut W
       ) -> Result<(), DisAsmError> {
+        if let Some(label) = map.labels.get(&ip) {
+            write!(w, "{}: ", label)?;
+        }
         match *self {
             AsmItem::Instruction(instr) => instr.disasm(ip, map, w),
             AsmItem::Value(word) => {
@@ -292,8 +364,15 @@ impl DisAsm for AsmItem {
 }
 
 impl DisAsm for u16 {
-    fn disasm<W: Write>(&self, _ip: usize, _map: &ImageMap, w: &mut W
+    fn disasm<W: Write>(&self, ip: usize, map: &ImageMap, w: &mut W
       ) -> Result<(), DisAsmError> {
+        if map.origins.contains(&ip) {
+            if let Some(lbl) = map.labels.get(&(*self as usize)) {
+                write!(w, "{}", lbl)?;
+                return Ok(());
+            }
+        }
+
         let word_u8 = *self as u8;
         if *self & vm::VALID_IO_MASK == 0
           && word_u8.is_ascii() && !word_u8.is_ascii_control() {

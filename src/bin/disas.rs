@@ -7,7 +7,7 @@ use std::{
 
 use synacor_vm::{
     binary,
-    asm::ImageMap,
+    asm::{ImageMap, DisAsmOpts},
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         binary::read_binary(&prog)?
     };
 
-    let map = ImageMap::new(&prog);
+    let map = ImageMap::new(&prog, &DisAsmOpts::default());
     map.disasm(&mut io::stdout())?;
 
     Ok(())

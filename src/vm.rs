@@ -18,10 +18,10 @@ pub enum Error {
     InvalidAddress(u16),
 }
 
-const INDIRECT_BIT: u16 = 0b1000000000000000;
-const VALID_REGISTER_MASK: u16 = 0b0111111111111000;
-const REGISTER_MASK: u16 = 0b0000000000000111;
-const VALID_IO_MASK: u16 = 0b1111111100000000;
+pub const INDIRECT_BIT: u16 = 0b1000000000000000;
+pub const VALID_REGISTER_MASK: u16 = 0b0111111111111000;
+pub const REGISTER_MASK: u16 = 0b0000000000000111;
+pub const VALID_IO_MASK: u16 = 0b1111111100000000;
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

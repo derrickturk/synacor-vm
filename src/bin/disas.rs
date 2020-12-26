@@ -19,10 +19,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         binary::read_binary(&prog)?
     };
 
-    let map = ImageMap::disasm(&prog);
-    for s in map.stmts {
-        println!("{:?}", s);
-    }
+    let map = ImageMap::new(&prog);
+    map.disasm(&mut io::stdout())?;
 
     Ok(())
 }

@@ -18,5 +18,9 @@ path = "src/bin/vm.rs"
 name = "syndis"
 path = "src/bin/disas.rs"
 
+[[bin]]
+name = "syntrace"
+path = "src/bin/tracevm.rs"
+
 [dependencies]
 structopt = "0.3"

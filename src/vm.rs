@@ -98,8 +98,7 @@ impl Vm {
 
     pub fn step<R: Read, W: Write>(&mut self, read: &mut R, write: &mut W
       ) -> Result<VmState> {
-        let (mut new_ip, instr) = Instruction::decode(
-          &self.memory[..], self.ip)?;
+        let (mut new_ip, instr) = self.decode_next()?;
         match instr {
             Instruction::Halt => return Ok(VmState::Halted),
 
@@ -198,6 +197,36 @@ impl Vm {
 
         self.ip = new_ip;
         Ok(VmState::Running)
+    }
+
+    #[inline]
+    pub fn memory(&self) -> &[u16; 32768] {
+        &self.memory
+    }
+
+    #[inline]
+    pub fn registers(&self) -> &[u16; 8] {
+        &self.registers
+    }
+
+    #[inline]
+    pub fn ip(&self) -> usize {
+        self.ip
+    }
+
+    #[inline]
+    pub fn stack(&self) -> &[u16] {
+        &self.stack
+    }
+
+    #[inline]
+    pub fn decode(&self, addr: usize) -> Result<(usize, Instruction)> {
+        Instruction::decode(&self.memory[..], addr)
+    }
+
+    #[inline]
+    pub fn decode_next(&self) -> Result<(usize, Instruction)> {
+        self.decode(self.ip)
     }
 
     #[inline]

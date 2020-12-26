@@ -306,7 +306,7 @@ pub enum Instruction {
 impl Instruction {
     pub fn decode(memory: &[u16], ip: usize) -> Result<(usize, Instruction)> {
         match *memory.get(ip).ok_or(Error::InvalidIp(ip))? {
-            0 => Ok((ip, Instruction::Halt)),
+            0 => Ok((ip + 1, Instruction::Halt)),
             1 => Ok((ip + 3, Instruction::Set(
                    DstOperand::decode_at(memory, ip + 1)?,
                    SrcOperand::decode_at(memory, ip + 2)?

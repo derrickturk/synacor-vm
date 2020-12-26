@@ -1,6 +1,7 @@
 use std::{
+    collections::HashMap,
     error::Error,
-    io::{self, Read, Write},
+    io::{self, BufRead, Cursor, Read, Write},
     fs::File,
     path::PathBuf,
 };
@@ -8,6 +9,7 @@ use std::{
 use synacor_vm::{
     binary,
     vm::{self, Vm, Instruction},
+    asm::{Labels, read_labels},
 };
 
 use structopt::StructOpt;
@@ -36,37 +38,70 @@ struct Options {
     initial_input: Option<PathBuf>,
 }
 
-fn run_tracing<R: Read>(vm: &mut Vm, r: &mut R) -> Result<(), Box<dyn Error>> {
-    let mut out_buf: Vec<u8> = Vec::new();
+struct Tracer {
+    vm: Vm,
+    labels: Labels,
+    in_cursor: Cursor<Vec<u8>>,
+    out_buf: Vec<u8>,
+}
 
-    loop {
-        let (_, instr) = vm.decode_next()?;
-        match instr {
-            Instruction::In(_) => {
-                println!("ip {}{}{} / regs {}{:?}{} / stack# {}{}{}",
-                  BEGIN_BLUE, vm.ip(), CLEAR_COLOR,
-                  BEGIN_BLUE, vm.registers(), CLEAR_COLOR,
-                  BEGIN_BLUE, vm.stack().len(), CLEAR_COLOR);
-                print!("{}input> {}", BEGIN_YELLOW, CLEAR_COLOR);
-                io::stdout().flush()?;
+impl Tracer {
+    fn new(vm: Vm, labels: Option<Labels>, initial_input: Option<Vec<u8>>
+      ) -> Self {
+        Self {
+            vm,
+            labels: labels.unwrap_or_else(|| HashMap::new()),
+            in_cursor: Cursor::new(initial_input.unwrap_or_else(|| Vec::new())),
+            out_buf: Vec::new(),
+        }
+    }
+
+    fn status_line(&self) {
+        println!("ip {}{}{} / regs {}{:?}{} / stack# {}{}{}",
+          BEGIN_BLUE, self.vm.ip(), CLEAR_COLOR,
+          BEGIN_BLUE, self.vm.registers(), CLEAR_COLOR,
+          BEGIN_BLUE, self.vm.stack().len(), CLEAR_COLOR);
+    }
+
+    fn run_tracing(&mut self) -> Result<(), Box<dyn Error>> {
+        loop {
+            let (_, instr) = self.vm.decode_next()?;
+            match instr {
+                Instruction::In(_) => {
+                    if self.in_cursor.position()
+                      == self.in_cursor.get_ref().len() as u64 {
+                        self.in_cursor.set_position(0);
+                        self.in_cursor.get_mut().clear();
+                        self.status_line();
+                        print!("{}input> {}", BEGIN_YELLOW, CLEAR_COLOR);
+                        io::stdout().flush()?;
+                        let stdin = io::stdin();
+                        stdin.lock().read_until(b'\n', self.in_cursor.get_mut())?;
+                    }
+                },
+
+                Instruction::Halt => {
+                    self.status_line();
+                    println!("{}HALT{}", BEGIN_RED, CLEAR_COLOR);
+                },
+
+                _ => { },
+            };
+
+            match self.vm.step(&mut self.in_cursor, &mut self.out_buf)? {
+                vm::VmState::Halted => return Ok(()),
+                vm::VmState::Running => { },
+            };
+
+            match self.out_buf.last() {
+                Some(b'\n') =>  {
+                    print!("{}output> {}", BEGIN_GREEN, CLEAR_COLOR);
+                    io::stdout().write_all(&mut self.out_buf)?;
+                    self.out_buf.clear();
+                },
+
+                _ => { },
             }
-
-            _ => { },
-        };
-
-        match vm.step(r, &mut out_buf)? {
-            vm::VmState::Halted => return Ok(()),
-            vm::VmState::Running => { },
-        };
-
-        match out_buf.last() {
-            Some(b'\n') =>  {
-                print!("{}output> {}", BEGIN_GREEN, CLEAR_COLOR);
-                io::stdout().write_all(&out_buf)?;
-                out_buf.clear();
-            },
-
-            _ => { },
         }
     }
 }
@@ -109,12 +144,16 @@ fn main() -> Result<(), Box<dyn Error>> {
       BEGIN_RED, CLEAR_COLOR, BEGIN_YELLOW, CLEAR_COLOR,
       BEGIN_BLUE, CLEAR_COLOR);
 
-    if let Some(path) = options.initial_input {
-        run_tracing(&mut vm,
-          &mut File::open(path)?.chain(io::stdin()))?;
+    let initial_input = if let Some(path) = options.initial_input {
+        let mut input = Vec::new();
+        File::open(path)?.read_to_end(&mut input)?;
+        Some(input)
     } else {
-        run_tracing(&mut vm, &mut io::stdin())?;
-    }
+        None
+    };
+
+    let mut tracer = Tracer::new(vm, None, initial_input);
+    tracer.run_tracing()?;
 
     Ok(())
 }

@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     error,
     fmt,
-    io::{self, Write},
+    io::{self, BufRead, Write},
 };
 
 use super::vm::{
@@ -41,16 +41,53 @@ impl fmt::Display for DisAsmError {
 
 impl error::Error for DisAsmError { }
 
+#[derive(Debug)]
+pub enum AsmError {
+    VmError(vm::Error),
+    SyntaxError(String),
+    LabelFileSyntaxError(String),
+    IOError(io::Error),
+}
+
+impl From<vm::Error> for AsmError {
+    fn from(other: vm::Error) -> Self {
+        AsmError::VmError(other)
+    }
+}
+
+impl From<io::Error> for AsmError {
+    fn from(other: io::Error) -> Self {
+        AsmError::IOError(other)
+    }
+}
+
+impl fmt::Display for AsmError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AsmError::VmError(e) => write!(f, "VM error: {}", e),
+            AsmError::IOError(e) => write!(f, "I/O error: {}", e),
+            AsmError::SyntaxError(line) =>
+              write!(f, "syntax error: \"{}\"", line),
+            AsmError::LabelFileSyntaxError(line) =>
+              write!(f, "label file syntax error: \"{}\"", line),
+        }
+    }
+}
+
+impl error::Error for AsmError { }
+
 #[derive(Copy, Clone, Debug)]
 pub enum AsmItem {
     Instruction(Instruction),
     Value(u16),
 }
 
+pub type Labels = HashMap<usize, String>;
+
 #[derive(Clone, Debug)]
 pub struct ImageMap {
     pub stmts: Vec<(usize, AsmItem)>,
-    pub labels: HashMap<usize, String>,
+    pub labels: Labels,
     pub origins: HashSet<usize>,
 }
 
@@ -95,7 +132,7 @@ impl ImageMap {
     }
 
     fn add_labels(ip: usize, instr: &Instruction,
-      labels: &mut HashMap<usize, String>, origins: &mut HashSet<usize>,
+      labels: &mut Labels, origins: &mut HashSet<usize>,
       next_label: &mut usize) {
         match instr {
             Instruction::Jmp(SrcOperand::Immediate(dst)) => {
@@ -143,7 +180,7 @@ impl ImageMap {
 pub struct DisAsmOpts {
     pub autolabel: bool,
     pub line_addrs: bool,
-    pub initial_labels: Option<HashMap<usize, String>>,
+    pub initial_labels: Option<Labels>,
 }
 
 impl Default for DisAsmOpts {
@@ -388,4 +425,20 @@ impl DisAsm for u16 {
         }
         Ok(())
     }
+}
+
+pub fn read_labels<R: BufRead>(r: &mut R) -> Result<Labels, AsmError> {
+    let mut labels = HashMap::new();
+    for line in r.lines() {
+        let line = line?;
+        let mut iter = line.split('\t');
+        let addr = iter.next()
+          .ok_or_else(|| AsmError::LabelFileSyntaxError(line.to_string()))?
+          .parse()
+          .map_err(|_| AsmError::LabelFileSyntaxError(line.to_string()))?;
+        let name = iter.next()
+          .ok_or_else(|| AsmError::LabelFileSyntaxError(line.to_string()))?;
+        labels.insert(addr, name.to_string());
+    }
+    Ok(labels)
 }

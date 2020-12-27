@@ -216,10 +216,6 @@ impl Tracer {
             io::stdout().flush()?;
             let stdin = io::stdin();
             stdin.lock().read_until(b'\n', self.in_cursor.get_mut())?;
-
-            if self.interrupt.swap(false, Ordering::Relaxed) {
-                return Ok(false);
-            }
         }
 
         // we can also just... get... nothing...
@@ -244,6 +240,7 @@ impl Tracer {
             Instruction::In(_) => {
                 if !self.ensure_input(single_step)? {
                     // an interrupt happened, don't step
+                    self.interrupt.store(true, Ordering::Relaxed);
                     return Ok(VmState::Running)
                 }
             },

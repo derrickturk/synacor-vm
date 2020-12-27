@@ -230,6 +230,31 @@ impl Vm {
     }
 
     #[inline]
+    pub fn memory_mut(&mut self) -> &mut [u16; 32768] {
+        &mut self.memory
+    }
+
+    #[inline]
+    pub fn registers_mut(&mut self) -> &mut [u16; 8] {
+        &mut self.registers
+    }
+
+    #[inline]
+    pub fn jump_to(&mut self, ip: usize) {
+        self.ip = ip;
+    }
+
+    #[inline]
+    pub fn push_stack(&mut self, val: u16) {
+        self.stack.push(val)
+    }
+
+    #[inline]
+    pub fn pop_stack(&mut self) -> Option<u16> {
+        self.stack.pop()
+    }
+
+    #[inline]
     fn read_src(&self, operand: &SrcOperand) -> u16 {
         match *operand {
             SrcOperand::Immediate(val) => val,

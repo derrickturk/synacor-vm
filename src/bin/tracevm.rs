@@ -5,6 +5,7 @@ use std::{
     fs::File,
     io::{self, BufReader, BufRead, Cursor, Read, Write},
     path::PathBuf,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
 };
 
 use synacor_vm::{
@@ -116,6 +117,7 @@ pub struct Tracer {
     breakpoints: HashSet<usize>,
     map: ImageMap,
     autolabel: bool,
+    interrupt: Arc<AtomicBool>,
 }
 
 impl Tracer {
@@ -135,6 +137,7 @@ impl Tracer {
             breakpoints: HashSet::new(),
             map,
             autolabel,
+            interrupt: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -159,6 +162,12 @@ impl Tracer {
                 },
             }
         }
+    }
+
+    pub fn register_sigint(&self) -> Result<(), TracerError> {
+        signal_hook::flag::register(signal_hook::consts::signal::SIGINT,
+          Arc::clone(&self.interrupt))?;
+        Ok(())
     }
 
     fn status_line(&self) {
@@ -196,7 +205,7 @@ impl Tracer {
         });
     }
 
-    fn ensure_input(&mut self, single_step: bool) -> Result<(), TracerError> {
+    fn ensure_input(&mut self, single_step: bool) -> Result<bool, TracerError> {
         if self.in_cursor.position() == self.in_cursor.get_ref().len() as u64 {
             if single_step {
                 self.status_line();
@@ -207,16 +216,19 @@ impl Tracer {
             io::stdout().flush()?;
             let stdin = io::stdin();
             stdin.lock().read_until(b'\n', self.in_cursor.get_mut())?;
+
+            if self.interrupt.swap(false, Ordering::Relaxed) {
+                return Ok(false);
+            }
         }
-        Ok(())
+
+        // we can also just... get... nothing...
+        Ok(self.in_cursor.position() < self.in_cursor.get_ref().len() as u64)
     }
 
-    fn pump_output(&mut self, single_step: bool) -> Result<(), TracerError> {
+    fn pump_output(&mut self) -> Result<(), TracerError> {
         match self.out_buf.last() {
             Some(b'\n') =>  {
-                if !single_step {
-                    self.status_line();
-                }
                 print!("{}output> {}", BEGIN_GREEN, CLEAR_COLOR);
                 io::stdout().write_all(&mut self.out_buf)?;
                 self.out_buf.clear();
@@ -230,7 +242,10 @@ impl Tracer {
         let (_, instr) = self.vm.decode_next()?;
         match instr {
             Instruction::In(_) => {
-                self.ensure_input(single_step)?;
+                if !self.ensure_input(single_step)? {
+                    // an interrupt happened, don't step
+                    return Ok(VmState::Running)
+                }
             },
 
             Instruction::Halt => {
@@ -244,7 +259,7 @@ impl Tracer {
         };
 
         let state = self.vm.step(&mut self.in_cursor, &mut self.out_buf)?;
-        self.pump_output(single_step)?;
+        self.pump_output()?;
         Ok(state)
     }
 
@@ -259,6 +274,10 @@ impl Tracer {
             TracerCommand::Continue(til) => {
                 let til = til.unwrap_or(usize::MAX);
                 while self.vm.ip() < til {
+                    if self.interrupt.swap(false, Ordering::Relaxed) {
+                        return Ok(TracerState::WaitCommand);
+                    }
+
                     match self.step(false)? {
                         VmState::Halted => break,
                         _ => { },
@@ -564,6 +583,7 @@ fn main() -> Result<(), TracerError> {
 
     let mut tracer = Tracer::new(vm, initial_labels, initial_input,
       options.autolabel);
+    tracer.register_sigint()?;
     tracer.run()?;
 
     Ok(())

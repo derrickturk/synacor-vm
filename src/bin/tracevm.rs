@@ -10,7 +10,15 @@ use std::{
 use synacor_vm::{
     binary,
     vm::{self, Vm, VmState, Instruction},
-    asm::{Labels, read_labels, AsmError, DisAsmError},
+    asm::{
+        AsmError,
+        DisAsm,
+        DisAsmOpts,
+        DisAsmError,
+        ImageMap,
+        Labels,
+        read_labels,
+    },
 };
 
 use structopt::StructOpt;
@@ -32,6 +40,9 @@ const CLEAR_COLOR: &'static str = "\u{1b}[0m";
 
 #[derive(StructOpt, Debug)]
 struct Options {
+    #[structopt(short, long)]
+    autolabel: bool,
+
     #[structopt(name="FILE", parse(from_os_str))]
     image_file: PathBuf,
 
@@ -103,22 +114,33 @@ pub struct Tracer {
     in_cursor: Cursor<Vec<u8>>,
     out_buf: Vec<u8>,
     breakpoints: HashSet<usize>,
+    map: ImageMap,
+    autolabel: bool,
 }
 
 impl Tracer {
-    pub fn new(vm: Vm, labels: Option<Labels>, initial_input: Option<Vec<u8>>
-      ) -> Self {
+    pub fn new(vm: Vm, labels: Option<Labels>, initial_input: Option<Vec<u8>>,
+      autolabel: bool) -> Self {
+        let map = ImageMap::new(vm.memory(), &DisAsmOpts {
+            autolabel,
+            line_addrs: false,
+            initial_labels: labels.clone(),
+        });
+
         Self {
             vm,
             labels: labels.unwrap_or_else(|| HashMap::new()),
             in_cursor: Cursor::new(initial_input.unwrap_or_else(|| Vec::new())),
             out_buf: Vec::new(),
             breakpoints: HashSet::new(),
+            map,
+            autolabel,
         }
     }
 
     pub fn run(&mut self) -> Result<(), TracerError> {
         loop {
+            self.status_line();
             let cmd = self.get_command();
             match cmd {
                 Ok(cmd) => {
@@ -151,6 +173,27 @@ impl Tracer {
               BEGIN_BLUE, self.vm.registers(), CLEAR_COLOR,
               BEGIN_BLUE, self.vm.stack().len(), CLEAR_COLOR);
         }
+
+        match self.vm.decode_next() {
+            Ok((_, instr)) => {
+                match instr.disasm(self.vm.ip(), &self.map, &mut io::stdout()) {
+                    Ok(_) => { },
+                    Err(e) => println!("{}disassembly error: {}{}",
+                      BEGIN_RED, e, CLEAR_COLOR),
+                }
+            },
+
+            Err(e) => println!("{}disassembly error: {}{}",
+              BEGIN_RED, e, CLEAR_COLOR),
+        }
+    }
+
+    fn remap(&mut self) {
+        self.map = ImageMap::new(self.vm.memory(), &DisAsmOpts {
+            autolabel: self.autolabel,
+            line_addrs: false,
+            initial_labels: Some(self.labels.clone()),
+        });
     }
 
     fn ensure_input(&mut self, single_step: bool) -> Result<(), TracerError> {
@@ -209,7 +252,6 @@ impl Tracer {
       ) -> Result<TracerState, TracerError> {
         let state = match command {
             TracerCommand::Step => {
-                self.status_line();
                 self.step(true)?;
                 TracerState::WaitCommand
             },
@@ -282,6 +324,16 @@ impl Tracer {
                 TracerState::WaitCommand
             },
 
+            TracerCommand::Status => {
+                self.status_line();
+                TracerState::WaitCommand
+            },
+
+            TracerCommand::Remap => {
+                self.remap();
+                TracerState::WaitCommand
+            },
+
             TracerCommand::Help => {
                 println!("{}syntrace - tracer commands:", BEGIN_YELLOW);
                 println!("  (s)tep");
@@ -294,6 +346,8 @@ impl Tracer {
                 println!("  pop");
                 println!("  poke <ptr> <val>");
                 println!("  se(t) [r0-r7] <val>");
+                println!("  st(a)tus");
+                println!("  re(m)ap");
                 println!("  (h)elp");
                 println!("  (q)uit{}", CLEAR_COLOR);
                 println!();
@@ -400,6 +454,10 @@ impl Tracer {
                 TracerCommand::SetReg(reg, val)
             },
 
+            "a" | "status" => TracerCommand::Status,
+
+            "m" | "remap" => TracerCommand::Remap,
+
             "h" | "help" => TracerCommand::Help,
 
             "q" | "quit" => TracerCommand::Quit,
@@ -436,6 +494,8 @@ pub enum TracerCommand {
     Pop,
     Poke(usize, u16),
     SetReg(usize, u16),
+    Status,
+    Remap,
     Help,
     Quit,
 }
@@ -502,7 +562,8 @@ fn main() -> Result<(), TracerError> {
         None
     };
 
-    let mut tracer = Tracer::new(vm, initial_labels, initial_input);
+    let mut tracer = Tracer::new(vm, initial_labels, initial_input,
+      options.autolabel);
     tracer.run()?;
 
     Ok(())
